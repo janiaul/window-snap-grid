@@ -267,6 +267,23 @@ IsWindhawkModEnabled(ModName) {
     }
 }
 
+; Check if the taskbar-on-top mod places the taskbar at the top for the given monitor
+IsTaskbarOnTop(MonitorIndex) {
+    if (!IsWindhawkModEnabled("taskbar-on-top"))
+        return false
+
+    regBase := "HKLM\SOFTWARE\Windhawk\Engine\Mods\taskbar-on-top\Settings"
+    primaryLocation := RegRead(regBase, "taskbarLocation", "top")
+
+    if (MonitorIndex = MonitorGetPrimary())
+        return primaryLocation = "top"
+
+    secondaryLocation := RegRead(regBase, "taskbarLocationSecondary", "sameAsPrimary")
+    if (secondaryLocation = "sameAsPrimary")
+        return primaryLocation = "top"
+    return secondaryLocation = "top"
+}
+
 ; Check if any window on the specified monitor is maximized
 IsWindowMaximized(MonitorIndex) {
     DetectHiddenWindows(false)
@@ -300,13 +317,10 @@ GetAdjustedWorkArea(MonitorIndex) {
         PrimaryMonitor)
     WindhawkCondition := IsWindhawkModEnabled("taskbar-auto-hide-when-maximized") && !IsWindowMaximized(MonitorIndex
     ) && (MonitorIndex = PrimaryMonitor || TaskbarSetting = 1)
-    TaskbarOnTopCondition := IsWindhawkModEnabled("taskbar-on-top") && (MonitorIndex = PrimaryMonitor
-        || TaskbarSetting = 1)
-
     if (TaskbarOnSecondaryCondition || SmartTaskbarCondition || WindhawkCondition)
         Bottom -= GetTaskbarHeight(MonitorIndex)
 
-    if (TaskbarOnTopCondition) {
+    if (IsTaskbarOnTop(MonitorIndex)) {
         MonitorGet(MonitorIndex, &MLeft, &MTop, &MRight, &MBottom)
         Top += GetTaskbarHeight(MonitorIndex)
         Bottom := MBottom
