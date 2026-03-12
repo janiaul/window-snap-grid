@@ -1,5 +1,14 @@
 #Requires AutoHotkey v2.0
 #NoTrayIcon
+
+#SingleInstance Off
+; Auto-elevate to Administrator
+if !A_IsAdmin {
+    try {
+        Run '*RunAs "' . A_ScriptFullPath . '"'
+    }
+    ExitApp
+}
 #SingleInstance Force
 
 global TASKBAR_GAP := 2  ; Change this value as needed
@@ -119,8 +128,8 @@ MoveWindowSafelyEnhanced(X, Y, W := "", H := "", WinTitle := "A", ForceToBottom 
             WinGetPos(&CurX, &CurY, &CurW, &CurH, WinTitle)
             ActiveMonitor := GetActiveMonitor(CurX, CurY, CurW, CurH, WinTitle)
             WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-            ; Calculate the absolute bottom position (taskbar top) minus the gap
-            AbsoluteBottom := WorkArea[4] - TASKBAR_GAP
+            ; When taskbar is on top, snap to the true screen bottom with no gap
+            AbsoluteBottom := IsWindhawkModEnabled("taskbar-on-top") ? WorkArea[4] : WorkArea[4] - TASKBAR_GAP
             ; Try to position the window so its bottom edge is TASKBAR_GAP pixels above the taskbar
             ; Account for window frame
             AdjustedY := AbsoluteBottom - CurH + FrameSize.Bottom
@@ -142,7 +151,7 @@ MoveWindowSafelyEnhanced(X, Y, W := "", H := "", WinTitle := "A", ForceToBottom 
             WinGetPos(&NewX, &NewY, &NewW, &NewH, WinTitle)
             WorkArea := GetAdjustedWorkArea(GetActiveMonitor(NewX, NewY, NewW, NewH, WinTitle))
             ; If window still isn't at the correct position, try one more adjustment
-            ExpectedBottom := WorkArea[4] - TASKBAR_GAP
+            ExpectedBottom := IsWindhawkModEnabled("taskbar-on-top") ? WorkArea[4] : WorkArea[4] - TASKBAR_GAP
             if (NewY + NewH < ExpectedBottom - 5) {  ; 5 pixel tolerance
                 FinalY := ExpectedBottom - NewH
                 WinMove(NewX, FinalY, , , WinTitle)
@@ -201,8 +210,8 @@ IsSmartTaskbarRunning() {
     return ProcessExist("SmartTaskbar.exe")
 }
 
-; Check if Windhawk taskbar auto-hide mod is enabled
-IsTaskbarAutoHideModEnabled() {
+; Check if a specific Windhawk mod is installed and enabled
+IsWindhawkModEnabled(ModName) {
     ; First check if Windhawk is running
     if (!ProcessExist("windhawk.exe"))
         return false
@@ -215,15 +224,15 @@ IsTaskbarAutoHideModEnabled() {
 
         jsonContent := FileRead(jsonPath)
 
-        ; Look for the taskbar-auto-hide-when-maximized section
-        modName := '"taskbar-auto-hide-when-maximized": {'
-        modPos := InStr(jsonContent, modName)
+        ; Look for the mod's section
+        modKey := '"' . ModName . '": {'
+        modPos := InStr(jsonContent, modKey)
 
         if (!modPos)
             return false  ; Mod not found
 
         ; Find the end of this mod's section (next '}' at the same level)
-        startPos := modPos + StrLen(modName)
+        startPos := modPos + StrLen(modKey)
         braceCount := 1
         pos := startPos
         endPos := 0
@@ -289,11 +298,18 @@ GetAdjustedWorkArea(MonitorIndex) {
     TaskbarOnSecondaryCondition := MonitorIndex != PrimaryMonitor && TaskbarSetting = 1
     SmartTaskbarCondition := MonitorIndex = PrimaryMonitor && IsSmartTaskbarRunning() && !IsWindowMaximized(
         PrimaryMonitor)
-    WindhawkCondition := IsTaskbarAutoHideModEnabled() && !IsWindowMaximized(MonitorIndex) && (MonitorIndex =
-        PrimaryMonitor || TaskbarSetting = 1)
+    WindhawkCondition := IsWindhawkModEnabled("taskbar-auto-hide-when-maximized") && !IsWindowMaximized(MonitorIndex
+    ) && (MonitorIndex = PrimaryMonitor || TaskbarSetting = 1)
+    TaskbarOnTopCondition := IsWindhawkModEnabled("taskbar-on-top") && (MonitorIndex = PrimaryMonitor
+        || TaskbarSetting = 1)
 
     if (TaskbarOnSecondaryCondition || SmartTaskbarCondition || WindhawkCondition)
         Bottom -= GetTaskbarHeight(MonitorIndex)
+
+    if (TaskbarOnTopCondition) {
+        Top += GetTaskbarHeight(MonitorIndex)
+        Bottom += GetTaskbarHeight(MonitorIndex)
+    }
 
     return [Left, Top, Right, Bottom]
 }
