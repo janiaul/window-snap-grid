@@ -307,8 +307,9 @@ GetAdjustedWorkArea(MonitorIndex) {
         Bottom -= GetTaskbarHeight(MonitorIndex)
 
     if (TaskbarOnTopCondition) {
+        MonitorGet(MonitorIndex, &MLeft, &MTop, &MRight, &MBottom)
         Top += GetTaskbarHeight(MonitorIndex)
-        Bottom += GetTaskbarHeight(MonitorIndex)
+        Bottom := MBottom
     }
 
     return [Left, Top, Right, Bottom]
