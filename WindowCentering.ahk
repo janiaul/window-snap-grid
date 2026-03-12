@@ -1,8 +1,8 @@
 #Requires AutoHotkey v2.0
-#SingleInstance Force
 #NoTrayIcon
+#SingleInstance Force
 
-global TASKBAR_GAP := 1  ; Change this value as needed
+global TASKBAR_GAP := 2  ; Change this value as needed
 
 ; Determine which monitor a window is on based on its coordinates
 GetActiveMonitor(X, Y, W := 0, H := 0, WinTitle := "A") {
@@ -164,7 +164,11 @@ MoveWindowSafely(X, Y, W := "", H := "", WinTitle := "A") {
 }
 
 ; Get the height of the taskbar, accounting for display scaling
-GetTaskbarHeight() {
+GetTaskbarHeight(MonitorIndex := 0) {
+    ; If no monitor specified, use primary
+    if (MonitorIndex = 0)
+        MonitorIndex := MonitorGetPrimary()
+
     ; Try to get the taskbar window
     if (taskbar := WinExist("ahk_class Shell_TrayWnd")) {
         WinGetPos(&Left, &Top, &Width, &Height, taskbar)
@@ -279,13 +283,17 @@ IsWindowMaximized(MonitorIndex) {
 GetAdjustedWorkArea(MonitorIndex) {
     MonitorGetWorkArea(MonitorIndex, &Left, &Top, &Right, &Bottom)
     PrimaryMonitor := MonitorGetPrimary()
+    TaskbarSetting := RegRead("HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "MMTaskbarEnabled", 0
+    )
 
+    TaskbarOnSecondaryCondition := MonitorIndex != PrimaryMonitor && TaskbarSetting = 1
     SmartTaskbarCondition := MonitorIndex = PrimaryMonitor && IsSmartTaskbarRunning() && !IsWindowMaximized(
         PrimaryMonitor)
-    WindhawkCondition := IsTaskbarAutoHideModEnabled() && !IsWindowMaximized(MonitorIndex)
+    WindhawkCondition := IsTaskbarAutoHideModEnabled() && !IsWindowMaximized(MonitorIndex) && (MonitorIndex =
+        PrimaryMonitor || TaskbarSetting = 1)
 
-    if (SmartTaskbarCondition || WindhawkCondition)
-        Bottom -= GetTaskbarHeight()
+    if (TaskbarOnSecondaryCondition || SmartTaskbarCondition || WindhawkCondition)
+        Bottom -= GetTaskbarHeight(MonitorIndex)
 
     return [Left, Top, Right, Bottom]
 }
@@ -300,7 +308,7 @@ GetFocusedWindowInfo() {
 }
 
 ; Center window horizontally and vertically
-^+#s:: ; Ctrl+Shift+Win+S
+$^+#s:: ; Ctrl+Shift+Win+S
 {
     try {
         WinInfo := GetFocusedWindowInfo()
@@ -315,7 +323,7 @@ GetFocusedWindowInfo() {
 }
 
 ; Snap left (center vertically, align to left)
-^+#a:: ; Ctrl+Shift+Win+A
+$^+#a:: ; Ctrl+Shift+Win+A
 {
     try {
         WinInfo := GetFocusedWindowInfo()
@@ -335,7 +343,7 @@ GetFocusedWindowInfo() {
 }
 
 ; Snap right (center vertically, align to right)
-^+#d:: ; Ctrl+Shift+Win+D
+$^+#d:: ; Ctrl+Shift+Win+D
 {
     try {
         WinInfo := GetFocusedWindowInfo()
@@ -355,7 +363,7 @@ GetFocusedWindowInfo() {
 }
 
 ; Snap top (center horizontally, align to top)
-^+#w:: ; Ctrl+Shift+Win+W
+$^+#w:: ; Ctrl+Shift+Win+W
 {
     try {
         WinInfo := GetFocusedWindowInfo()
@@ -369,8 +377,8 @@ GetFocusedWindowInfo() {
     }
 }
 
-; Enhanced snap bottom (center horizontally, align to bottom) - IMPROVED VERSION
-^+#x:: ; Ctrl+Shift+Win+X
+; Enhanced snap bottom (center horizontally, align to bottom)
+$^+#x:: ; Ctrl+Shift+Win+X
 {
     try {
         WinInfo := GetFocusedWindowInfo()
@@ -385,7 +393,7 @@ GetFocusedWindowInfo() {
 }
 
 ; Top-left corner
-^+#q:: ; Ctrl+Shift+Win+Q
+$^+#q:: ; Ctrl+Shift+Win+Q
 {
     try {
         WinInfo := GetFocusedWindowInfo()
@@ -404,7 +412,7 @@ GetFocusedWindowInfo() {
 }
 
 ; Top-right corner
-^+#e:: ; Ctrl+Shift+Win+E
+$^+#e:: ; Ctrl+Shift+Win+E
 {
     try {
         WinInfo := GetFocusedWindowInfo()
@@ -423,7 +431,7 @@ GetFocusedWindowInfo() {
 }
 
 ; Enhanced bottom-left corner
-^+#z:: ; Ctrl+Shift+Win+Z
+$^+#z:: ; Ctrl+Shift+Win+Z
 {
     try {
         WinInfo := GetFocusedWindowInfo()
@@ -441,7 +449,7 @@ GetFocusedWindowInfo() {
 }
 
 ; Enhanced bottom-right corner
-^+#c:: ; Ctrl+Shift+Win+C
+$^+#c:: ; Ctrl+Shift+Win+C
 {
     try {
         WinInfo := GetFocusedWindowInfo()
