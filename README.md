@@ -1,4 +1,4 @@
-# WindowSnapGrid
+# Window Snap Grid
 An AutoHotkey v2 script that snaps windows to a 9-point grid across multiple monitors, with intelligent handling of various taskbar configurations.
 
 ## Hotkeys
