@@ -130,7 +130,6 @@ MoveWindowSafelyEnhanced(X, Y, W := "", H := "", WinTitle := "A", ForceToBottom 
             WorkArea := GetAdjustedWorkArea(ActiveMonitor)
             ; When taskbar is on top, snap to the true screen bottom with no gap
             AbsoluteBottom := IsWindhawkModEnabled("taskbar-on-top") ? WorkArea[4] : WorkArea[4] - TASKBAR_GAP
-            ; Try to position the window so its bottom edge is TASKBAR_GAP pixels above the taskbar
             ; Account for window frame
             AdjustedY := AbsoluteBottom - CurH + FrameSize.Bottom
             ; Use the adjusted Y position
@@ -350,7 +349,7 @@ GetAdjustedWorkArea(MonitorIndex) {
 
     if (IsTaskbarOnTop(MonitorIndex)) {
         MonitorGet(MonitorIndex, &MLeft, &MTop, &MRight, &MBottom)
-        Top += GetTaskbarHeight(MonitorIndex)
+        Top += GetTaskbarHeight(MonitorIndex) + TASKBAR_GAP
         Bottom := MBottom
     }
 
