@@ -1,17 +1,9 @@
 #Requires AutoHotkey v2.0
 #NoTrayIcon
-
-#SingleInstance Off
-; Auto-elevate to Administrator
-if !A_IsAdmin {
-    try {
-        Run '*RunAs "' . A_ScriptFullPath . '"'
-    }
-    ExitApp
-}
 #SingleInstance Force
 
-global TASKBAR_GAP := 2  ; Change this value as needed
+global TASKBAR_GAP := 0          ; Pixels between window and taskbar
+global SCREEN_EDGE_MARGIN := 2   ; Pixels between window and screen edges (prevents frame bleed)
 
 ; Determine which monitor a window is on based on its coordinates
 GetActiveMonitor(X, Y, W := 0, H := 0, WinTitle := "A") {
@@ -335,6 +327,10 @@ IsWindowMaximized(MonitorIndex) {
 ; Get the adjusted work area for a monitor, accounting for SmartTaskbar and Windhawk mods
 GetAdjustedWorkArea(MonitorIndex) {
     MonitorGetWorkArea(MonitorIndex, &Left, &Top, &Right, &Bottom)
+    Left += SCREEN_EDGE_MARGIN
+    Top += SCREEN_EDGE_MARGIN
+    Right -= SCREEN_EDGE_MARGIN
+    Bottom -= SCREEN_EDGE_MARGIN
     PrimaryMonitor := MonitorGetPrimary()
     TaskbarSetting := RegRead("HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "MMTaskbarEnabled", 0
     )
@@ -349,13 +345,13 @@ GetAdjustedWorkArea(MonitorIndex) {
 
     if (IsTaskbarOnTop(MonitorIndex)) {
         MonitorGet(MonitorIndex, &MLeft, &MTop, &MRight, &MBottom)
-        Top += GetTaskbarHeight(MonitorIndex) + TASKBAR_GAP
-        Bottom := MBottom
+        Top += GetTaskbarHeight(MonitorIndex)
+        Bottom := MBottom - SCREEN_EDGE_MARGIN
     }
 
     if (IsNativeAutoHideOnSecondary(MonitorIndex)) {
         MonitorGet(MonitorIndex, &MLeft, &MTop, &MRight, &MBottom)
-        Bottom := MBottom
+        Bottom := MBottom - SCREEN_EDGE_MARGIN
     }
 
     return [Left, Top, Right, Bottom]
