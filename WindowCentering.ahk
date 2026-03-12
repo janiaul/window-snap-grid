@@ -267,6 +267,34 @@ IsWindhawkModEnabled(ModName) {
     }
 }
 
+; Check if a secondary monitor's taskbar is using native Windows auto-hide due to
+; the taskbar-auto-hide-when-maximized mod's primaryMonitorOnly setting
+IsNativeAutoHideOnSecondary(MonitorIndex) {
+    if (MonitorIndex = MonitorGetPrimary())
+        return false
+    if (!IsWindhawkModEnabled("taskbar-auto-hide-when-maximized"))
+        return false
+
+    regBase := "HKLM\SOFTWARE\Windhawk\Engine\Mods\taskbar-auto-hide-when-maximized\Settings"
+    primaryMonitorOnly := RegRead(regBase, "primaryMonitorOnly", 0)
+    return primaryMonitorOnly = 1
+}
+
+; Check if the taskbar-auto-hide-when-maximized mod applies to the given monitor
+IsWindhawkAutoHideApplies(MonitorIndex) {
+    if (!IsWindhawkModEnabled("taskbar-auto-hide-when-maximized"))
+        return false
+    if (IsWindowMaximized(MonitorIndex))
+        return false
+    if (MonitorIndex = MonitorGetPrimary())
+        return true
+
+    ; For secondary monitors, check if the mod is restricted to primary only
+    regBase := "HKLM\SOFTWARE\Windhawk\Engine\Mods\taskbar-auto-hide-when-maximized\Settings"
+    primaryMonitorOnly := RegRead(regBase, "primaryMonitorOnly", 0)
+    return primaryMonitorOnly != 1
+}
+
 ; Check if the taskbar-on-top mod places the taskbar at the top for the given monitor
 IsTaskbarOnTop(MonitorIndex) {
     if (!IsWindhawkModEnabled("taskbar-on-top"))
@@ -315,14 +343,19 @@ GetAdjustedWorkArea(MonitorIndex) {
     TaskbarOnSecondaryCondition := MonitorIndex != PrimaryMonitor && TaskbarSetting = 1
     SmartTaskbarCondition := MonitorIndex = PrimaryMonitor && IsSmartTaskbarRunning() && !IsWindowMaximized(
         PrimaryMonitor)
-    WindhawkCondition := IsWindhawkModEnabled("taskbar-auto-hide-when-maximized") && !IsWindowMaximized(MonitorIndex
-    ) && (MonitorIndex = PrimaryMonitor || TaskbarSetting = 1)
+    WindhawkCondition := IsWindhawkAutoHideApplies(MonitorIndex) && (MonitorIndex = PrimaryMonitor
+        || TaskbarSetting = 1)
     if (TaskbarOnSecondaryCondition || SmartTaskbarCondition || WindhawkCondition)
         Bottom -= GetTaskbarHeight(MonitorIndex)
 
     if (IsTaskbarOnTop(MonitorIndex)) {
         MonitorGet(MonitorIndex, &MLeft, &MTop, &MRight, &MBottom)
         Top += GetTaskbarHeight(MonitorIndex)
+        Bottom := MBottom
+    }
+
+    if (IsNativeAutoHideOnSecondary(MonitorIndex)) {
+        MonitorGet(MonitorIndex, &MLeft, &MTop, &MRight, &MBottom)
         Bottom := MBottom
     }
 
