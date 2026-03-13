@@ -5,6 +5,36 @@
 global TASKBAR_GAP := 0          ; Pixels between window and taskbar
 global SCREEN_EDGE_MARGIN := 2   ; Pixels between window and screen edges (prevents frame bleed)
 
+; Cache for expensive calls (file reads, window enumeration, registry reads)
+; Values are reused within _CACHE_TTL milliseconds to avoid redundant work
+global _cache := Map()
+global _CACHE_TTL := 500
+
+_CacheGet(key, &value) {
+    if (_cache.Has(key)) {
+        entry := _cache[key]
+        if (A_TickCount - entry.tick < _CACHE_TTL) {
+            value := entry.value
+            return true
+        }
+    }
+    return false
+}
+
+_CacheSet(key, value) {
+    _cache[key] := { value: value, tick: A_TickCount }
+    return value
+}
+
+; Returns true if this hotkey+window combination was already triggered within the cache TTL
+_IsHotkeyDuplicate(HotkeyName) {
+    cacheKey := "HK_" . HotkeyName . "_" . WinExist("A")
+    if (_CacheGet(cacheKey, &_))
+        return true
+    _CacheSet(cacheKey, true)
+    return false
+}
+
 ; Determine which monitor a window is on based on its coordinates
 GetActiveMonitor(X, Y, W := 0, H := 0, WinTitle := "A") {
     if (WinTitle != "") {
@@ -65,13 +95,10 @@ WindowExists(WinTitle := "A") {
 
 ; Get window frame thickness (for better positioning accuracy)
 GetWindowFrameSize(WinTitle := "A") {
-    if (!WindowExists(WinTitle)) {
+    if (!(hWnd := WinExist(WinTitle)))
         return { Left: 0, Top: 0, Right: 0, Bottom: 0 }
-    }
 
     try {
-        hWnd := WinExist(WinTitle)
-
         ; Get window rect (including frame)
         WindowRECT := Buffer(16)
         DllCall("GetWindowRect", "Ptr", hWnd, "Ptr", WindowRECT)
@@ -121,13 +148,13 @@ MoveWindowSafelyEnhanced(X, Y, W := "", H := "", WinTitle := "A", ForceToBottom 
             ActiveMonitor := GetActiveMonitor(CurX, CurY, CurW, CurH, WinTitle)
             WorkArea := GetAdjustedWorkArea(ActiveMonitor)
             ; When taskbar is on top, snap to the true screen bottom with no gap
-            AbsoluteBottom := IsWindhawkModEnabled("taskbar-on-top") ? WorkArea[4] : WorkArea[4] - TASKBAR_GAP
+            AbsoluteBottom := IsTaskbarOnTop(ActiveMonitor) ? WorkArea[4] : WorkArea[4] - TASKBAR_GAP
             ; Account for window frame
             AdjustedY := AbsoluteBottom - CurH + FrameSize.Bottom
             ; Use the adjusted Y position
             Y := AdjustedY
         }
-        if (W = "" and H = "") {
+        if (W = "" && H = "") {
             WinMove(X, Y, , , WinTitle)
         } else if (W = "") {
             WinMove(X, Y, , H, WinTitle)
@@ -140,9 +167,10 @@ MoveWindowSafelyEnhanced(X, Y, W := "", H := "", WinTitle := "A", ForceToBottom 
         if (ForceToBottom) {
             Sleep(10)  ; Small delay to ensure the move completed
             WinGetPos(&NewX, &NewY, &NewW, &NewH, WinTitle)
-            WorkArea := GetAdjustedWorkArea(GetActiveMonitor(NewX, NewY, NewW, NewH, WinTitle))
+            ActiveMonitor := GetActiveMonitor(NewX, NewY, NewW, NewH, WinTitle)
+            WorkArea := GetAdjustedWorkArea(ActiveMonitor)
             ; If window still isn't at the correct position, try one more adjustment
-            ExpectedBottom := IsWindhawkModEnabled("taskbar-on-top") ? WorkArea[4] : WorkArea[4] - TASKBAR_GAP
+            ExpectedBottom := IsTaskbarOnTop(ActiveMonitor) ? WorkArea[4] : WorkArea[4] - TASKBAR_GAP
             if (NewY + NewH < ExpectedBottom - 5) {  ; 5 pixel tolerance
                 FinalY := ExpectedBottom - NewH
                 WinMove(NewX, FinalY, , , WinTitle)
@@ -169,66 +197,62 @@ GetTaskbarHeight(MonitorIndex := 0) {
     if (MonitorIndex = 0)
         MonitorIndex := MonitorGetPrimary()
 
+    cacheKey := "TBH_" . MonitorIndex
+    if (_CacheGet(cacheKey, &cached))
+        return cached
+
     ; Try to get the taskbar window
     if (taskbar := WinExist("ahk_class Shell_TrayWnd")) {
         WinGetPos(&Left, &Top, &Width, &Height, taskbar)
-        return Height
+        return _CacheSet(cacheKey, Height)
     }
-    ; If taskbar window not found, estimate based on primary monitor resolution and scaling
-    MonitorGetWorkArea(MonitorGetPrimary(), &Left, &Top, &Right, &Bottom)
-
-    ; Get the display DPI scaling
+    ; If taskbar window not found, estimate based on DPI scaling
     hDC := DllCall("GetDC", "Ptr", 0)
     dpi := DllCall("GetDeviceCaps", "Ptr", hDC, "Int", 88)  ; LOGPIXELSX
     DllCall("ReleaseDC", "Ptr", 0, "Ptr", hDC)
     scaleFactor := dpi / 96  ; 96 is the base DPI
 
     ; Base taskbar height is 48 pixels at 100% scaling
-    baseHeight := 48
-
-    ; Adjust height based on scaling factor
-    return Round(baseHeight * scaleFactor)
-}
-
-; Check if the given monitor is the primary monitor
-IsPrimaryMonitor(MonitorIndex) {
-    MonitorInfo := MonitorGetPrimary()
-    return MonitorIndex = MonitorInfo
+    return _CacheSet(cacheKey, Round(48 * scaleFactor))
 }
 
 ; Check if SmartTaskbar is running
 IsSmartTaskbarRunning() {
-    return ProcessExist("SmartTaskbar.exe")
+    cacheKey := "STB_running"
+    if (_CacheGet(cacheKey, &cached))
+        return cached
+    return _CacheSet(cacheKey, ProcessExist("SmartTaskbar.exe") != 0)
 }
 
 ; Check if a specific Windhawk mod is installed and enabled
+; Result is cached to avoid repeated file reads within the cache TTL
 IsWindhawkModEnabled(ModName) {
-    ; First check if Windhawk is running
-    if (!ProcessExist("windhawk.exe"))
-        return false
+    cacheKey := "WH_enabled_" . ModName
+    if (_CacheGet(cacheKey, &cached))
+        return cached
+
+    if (!_IsWindhawkRunning())
+        return _CacheSet(cacheKey, false)
 
     try {
-        ; Read the Windhawk userprofile.json file
         jsonPath := "C:\ProgramData\Windhawk\userprofile.json"
         if (!FileExist(jsonPath))
-            return false
+            return _CacheSet(cacheKey, false)
 
         jsonContent := FileRead(jsonPath)
 
-        ; Look for the mod's section
         modKey := '"' . ModName . '": {'
         modPos := InStr(jsonContent, modKey)
-
         if (!modPos)
-            return false  ; Mod not found
+            return _CacheSet(cacheKey, false)
 
-        ; Find the end of this mod's section (next '}' at the same level)
         startPos := modPos + StrLen(modKey)
         braceCount := 1
         pos := startPos
         endPos := 0
+        jsonLen := StrLen(jsonContent)
 
-        while (pos <= StrLen(jsonContent) && braceCount > 0) {
+        while (pos <= jsonLen && braceCount > 0) {
             char := SubStr(jsonContent, pos, 1)
             if (char = '{')
                 braceCount++
@@ -241,21 +265,23 @@ IsWindhawkModEnabled(ModName) {
         }
 
         if (!endPos)
-            return false
+            return _CacheSet(cacheKey, false)
 
-        ; Extract just this mod's content
         modSection := SubStr(jsonContent, startPos, endPos - startPos)
-
-        ; Check for disabled status in this section only
-        if (InStr(modSection, '"disabled": true'))
-            return false
-
-        ; If we get here, mod exists and is either disabled: false or has no disabled property
-        return true
+        result := !InStr(modSection, '"disabled": true')
+        return _CacheSet(cacheKey, result)
 
     } catch {
-        return false
+        return _CacheSet(cacheKey, false)
     }
+}
+
+; Check if the Windhawk process is running (cached)
+_IsWindhawkRunning() {
+    cacheKey := "WH_running"
+    if (_CacheGet(cacheKey, &cached))
+        return cached
+    return _CacheSet(cacheKey, ProcessExist("windhawk.exe") != 0)
 }
 
 ; Check if a secondary monitor's taskbar is using native Windows auto-hide due to
@@ -266,8 +292,7 @@ IsNativeAutoHideOnSecondary(MonitorIndex) {
     if (!IsWindhawkModEnabled("taskbar-auto-hide-when-maximized"))
         return false
 
-    regBase := "HKLM\SOFTWARE\Windhawk\Engine\Mods\taskbar-auto-hide-when-maximized\Settings"
-    primaryMonitorOnly := RegRead(regBase, "primaryMonitorOnly", 0)
+    primaryMonitorOnly := _GetAutoHidePrimaryMonitorOnly()
     return primaryMonitorOnly = 1
 }
 
@@ -281,12 +306,11 @@ IsWindhawkAutoHideActive(MonitorIndex) {
     if (MonitorIndex = MonitorGetPrimary())
         return true
 
-    regBase := "HKLM\SOFTWARE\Windhawk\Engine\Mods\taskbar-auto-hide-when-maximized\Settings"
-    primaryMonitorOnly := RegRead(regBase, "primaryMonitorOnly", 0)
-    return primaryMonitorOnly != 1
+    return _GetAutoHidePrimaryMonitorOnly() != 1
 }
 
 ; Check if the taskbar-auto-hide-when-maximized mod applies to the given monitor
+; (mod is enabled but taskbar is NOT currently hidden — no maximized window)
 IsWindhawkAutoHideApplies(MonitorIndex) {
     if (!IsWindhawkModEnabled("taskbar-auto-hide-when-maximized"))
         return false
@@ -295,48 +319,61 @@ IsWindhawkAutoHideApplies(MonitorIndex) {
     if (MonitorIndex = MonitorGetPrimary())
         return true
 
-    ; For secondary monitors, check if the mod is restricted to primary only
+    return _GetAutoHidePrimaryMonitorOnly() != 1
+}
+
+; Read and cache the primaryMonitorOnly registry setting for taskbar-auto-hide-when-maximized
+_GetAutoHidePrimaryMonitorOnly() {
+    cacheKey := "WH_primaryMonitorOnly"
+    if (_CacheGet(cacheKey, &cached))
+        return cached
+
     regBase := "HKLM\SOFTWARE\Windhawk\Engine\Mods\taskbar-auto-hide-when-maximized\Settings"
-    primaryMonitorOnly := RegRead(regBase, "primaryMonitorOnly", 0)
-    return primaryMonitorOnly != 1
+    return _CacheSet(cacheKey, RegRead(regBase, "primaryMonitorOnly", 0))
 }
 
 ; Check if the taskbar-on-top mod places the taskbar at the top for the given monitor
 IsTaskbarOnTop(MonitorIndex) {
+    cacheKey := "WH_taskbarOnTop_" . MonitorIndex
+    if (_CacheGet(cacheKey, &cached))
+        return cached
+
     if (!IsWindhawkModEnabled("taskbar-on-top"))
-        return false
+        return _CacheSet(cacheKey, false)
 
     regBase := "HKLM\SOFTWARE\Windhawk\Engine\Mods\taskbar-on-top\Settings"
     primaryLocation := RegRead(regBase, "taskbarLocation", "top")
 
     if (MonitorIndex = MonitorGetPrimary())
-        return primaryLocation = "top"
+        return _CacheSet(cacheKey, primaryLocation = "top")
 
     secondaryLocation := RegRead(regBase, "taskbarLocationSecondary", "sameAsPrimary")
-    if (secondaryLocation = "sameAsPrimary")
-        return primaryLocation = "top"
-    return secondaryLocation = "top"
+    result := (secondaryLocation = "sameAsPrimary") ? (primaryLocation = "top") : (secondaryLocation = "top")
+    return _CacheSet(cacheKey, result)
 }
 
 ; Check if any window on the specified monitor is maximized
+; Result is cached to avoid repeated window enumeration within the cache TTL
 IsWindowMaximized(MonitorIndex) {
+    cacheKey := "WM_" . MonitorIndex
+    if (_CacheGet(cacheKey, &cached))
+        return cached
+
     DetectHiddenWindows(false)
     windows := WinGetList()
 
     for window in windows {
         try {
-            title := WinGetTitle("ahk_id " . window)
-            state := WinGetMinMax("ahk_id " . window)
+            if (WinGetMinMax("ahk_id " . window) != 1)
+                continue
             WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " . window)
-            monitor := GetActiveMonitor(wx, wy, ww, wh, "ahk_id " . window)
-
-            if (monitor = MonitorIndex && state = 1)
-                return true
-        } catch Error {
+            if (GetActiveMonitor(wx, wy, ww, wh, "ahk_id " . window) = MonitorIndex)
+                return _CacheSet(cacheKey, true)
+        } catch {
             continue
         }
     }
-    return false
+    return _CacheSet(cacheKey, false)
 }
 
 ; Get the adjusted work area for a monitor, accounting for SmartTaskbar and Windhawk mods
@@ -346,28 +383,40 @@ GetAdjustedWorkArea(MonitorIndex) {
     Top += SCREEN_EDGE_MARGIN
     Right -= SCREEN_EDGE_MARGIN
     Bottom -= SCREEN_EDGE_MARGIN
-    PrimaryMonitor := MonitorGetPrimary()
-    TaskbarSetting := RegRead("HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "MMTaskbarEnabled", 0
-    )
 
+    PrimaryMonitor := MonitorGetPrimary()
+
+    cacheKey := "MMTaskbar"
+    if (!_CacheGet(cacheKey, &TaskbarSetting))
+        TaskbarSetting := _CacheSet(cacheKey, RegRead(
+            "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "MMTaskbarEnabled", 0))
+
+    TaskbarOnThisMonitor := (MonitorIndex = PrimaryMonitor || TaskbarSetting = 1)
+
+    ; Evaluate each condition once
     TaskbarOnSecondaryCondition := MonitorIndex != PrimaryMonitor && TaskbarSetting = 1
     SmartTaskbarCondition := MonitorIndex = PrimaryMonitor && IsSmartTaskbarRunning() && !IsWindowMaximized(
         PrimaryMonitor)
-    WindhawkCondition := IsWindhawkAutoHideApplies(MonitorIndex) && (MonitorIndex = PrimaryMonitor
-        || TaskbarSetting = 1)
+    WindhawkCondition := TaskbarOnThisMonitor && IsWindhawkAutoHideApplies(MonitorIndex)
+    TaskbarOnTop := IsTaskbarOnTop(MonitorIndex)
+    AutoHideActive := TaskbarOnThisMonitor && (IsNativeAutoHideOnSecondary(MonitorIndex) || IsWindhawkAutoHideActive(
+        MonitorIndex))
+
     if (TaskbarOnSecondaryCondition || SmartTaskbarCondition || WindhawkCondition)
         Bottom -= GetTaskbarHeight(MonitorIndex)
 
-    if (IsTaskbarOnTop(MonitorIndex)) {
+    ; Fetch physical monitor bounds once for both blocks that may need it
+    if (TaskbarOnTop || AutoHideActive)
         MonitorGet(MonitorIndex, &MLeft, &MTop, &MRight, &MBottom)
-        Top += GetTaskbarHeight(MonitorIndex)
+
+    if (TaskbarOnTop) {
+        Top := MTop + GetTaskbarHeight(MonitorIndex) + SCREEN_EDGE_MARGIN
         Bottom := MBottom - SCREEN_EDGE_MARGIN
     }
 
-    if (IsNativeAutoHideOnSecondary(MonitorIndex) || IsWindhawkAutoHideActive(MonitorIndex)) {
-        MonitorGet(MonitorIndex, &MLeft, &MTop, &MRight, &MBottom)
+    if (AutoHideActive) {
         Bottom := MBottom - SCREEN_EDGE_MARGIN
-        if (IsTaskbarOnTop(MonitorIndex))
+        if (TaskbarOnTop)
             Top := MTop + SCREEN_EDGE_MARGIN
     }
 
@@ -386,6 +435,8 @@ GetFocusedWindowInfo() {
 ; Center window horizontally and vertically
 $^+#s:: ; Ctrl+Shift+Win+S
 {
+    if (_IsHotkeyDuplicate(A_ThisHotkey))
+        return
     try {
         WinInfo := GetFocusedWindowInfo()
         ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
@@ -401,17 +452,15 @@ $^+#s:: ; Ctrl+Shift+Win+S
 ; Snap left (center vertically, align to left)
 $^+#a:: ; Ctrl+Shift+Win+A
 {
+    if (_IsHotkeyDuplicate(A_ThisHotkey))
+        return
     try {
         WinInfo := GetFocusedWindowInfo()
         ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
         WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        ; Get the window's frame size
         FrameSize := GetWindowFrameSize("A")
-        ; Subtract the left frame size from the X-position
         LeftX := WorkArea[1] - FrameSize.Left
-        ; Center the window vertically
         CenterY := WorkArea[2] + (WorkArea[4] - WorkArea[2] - WinInfo.H) // 2
-        ; Use enhanced function, but do NOT force to bottom
         MoveWindowSafelyEnhanced(LeftX, CenterY, "", "", "A", false)
     } catch as err {
         MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
@@ -421,17 +470,15 @@ $^+#a:: ; Ctrl+Shift+Win+A
 ; Snap right (center vertically, align to right)
 $^+#d:: ; Ctrl+Shift+Win+D
 {
+    if (_IsHotkeyDuplicate(A_ThisHotkey))
+        return
     try {
         WinInfo := GetFocusedWindowInfo()
         ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
         WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        ; Get the window's frame size
         FrameSize := GetWindowFrameSize("A")
-        ; Add the right frame size to the X-position
         RightX := WorkArea[3] - WinInfo.W + FrameSize.Right
-        ; Center the window vertically
         CenterY := WorkArea[2] + (WorkArea[4] - WorkArea[2] - WinInfo.H) // 2
-        ; Use enhanced function, but do NOT force to bottom
         MoveWindowSafelyEnhanced(RightX, CenterY, "", "", "A", false)
     } catch as err {
         MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
@@ -441,6 +488,8 @@ $^+#d:: ; Ctrl+Shift+Win+D
 ; Snap top (center horizontally, align to top)
 $^+#w:: ; Ctrl+Shift+Win+W
 {
+    if (_IsHotkeyDuplicate(A_ThisHotkey))
+        return
     try {
         WinInfo := GetFocusedWindowInfo()
         ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
@@ -453,15 +502,16 @@ $^+#w:: ; Ctrl+Shift+Win+W
     }
 }
 
-; Enhanced snap bottom (center horizontally, align to bottom)
+; Snap bottom (center horizontally, align to bottom)
 $^+#x:: ; Ctrl+Shift+Win+X
 {
+    if (_IsHotkeyDuplicate(A_ThisHotkey))
+        return
     try {
         WinInfo := GetFocusedWindowInfo()
         ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
         WorkArea := GetAdjustedWorkArea(ActiveMonitor)
         CenterX := WorkArea[1] + (WorkArea[3] - WorkArea[1] - WinInfo.W) // 2
-        ; Use the enhanced function with ForceToTaskbar flag
         MoveWindowSafelyEnhanced(CenterX, 0, "", "", "A", true)
     } catch as err {
         MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
@@ -471,15 +521,14 @@ $^+#x:: ; Ctrl+Shift+Win+X
 ; Top-left corner
 $^+#q:: ; Ctrl+Shift+Win+Q
 {
+    if (_IsHotkeyDuplicate(A_ThisHotkey))
+        return
     try {
         WinInfo := GetFocusedWindowInfo()
         ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
         WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        ; Get the window's frame size
         FrameSize := GetWindowFrameSize("A")
-        ; Subtract the left frame size from the X-position
         LeftX := WorkArea[1] - FrameSize.Left
-        ; Use the top Y-position
         TopY := WorkArea[2]
         MoveWindowSafelyEnhanced(LeftX, TopY, "", "", "A", false)
     } catch as err {
@@ -490,15 +539,14 @@ $^+#q:: ; Ctrl+Shift+Win+Q
 ; Top-right corner
 $^+#e:: ; Ctrl+Shift+Win+E
 {
+    if (_IsHotkeyDuplicate(A_ThisHotkey))
+        return
     try {
         WinInfo := GetFocusedWindowInfo()
         ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
         WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        ; Get the window's frame size
         FrameSize := GetWindowFrameSize("A")
-        ; Add the right frame size to the X-position
         RightX := WorkArea[3] - WinInfo.W + FrameSize.Right
-        ; Use the top Y-position
         TopY := WorkArea[2]
         MoveWindowSafelyEnhanced(RightX, TopY, "", "", "A", false)
     } catch as err {
@@ -506,36 +554,34 @@ $^+#e:: ; Ctrl+Shift+Win+E
     }
 }
 
-; Enhanced bottom-left corner
+; Bottom-left corner
 $^+#z:: ; Ctrl+Shift+Win+Z
 {
+    if (_IsHotkeyDuplicate(A_ThisHotkey))
+        return
     try {
         WinInfo := GetFocusedWindowInfo()
         ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
         WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        ; Get the window's frame size
         FrameSize := GetWindowFrameSize("A")
-        ; Subtract the left frame size from the X-position
         LeftX := WorkArea[1] - FrameSize.Left
-        ; Force the window to the bottom
         MoveWindowSafelyEnhanced(LeftX, 0, "", "", "A", true)
     } catch as err {
         MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
     }
 }
 
-; Enhanced bottom-right corner
+; Bottom-right corner
 $^+#c:: ; Ctrl+Shift+Win+C
 {
+    if (_IsHotkeyDuplicate(A_ThisHotkey))
+        return
     try {
         WinInfo := GetFocusedWindowInfo()
         ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
         WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        ; Get the window's frame size
         FrameSize := GetWindowFrameSize("A")
-        ; Add the right frame size to the X-position
         RightX := WorkArea[3] - WinInfo.W + FrameSize.Right
-        ; Force the window to the bottom
         MoveWindowSafelyEnhanced(RightX, 0, "", "", "A", true)
     } catch as err {
         MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
