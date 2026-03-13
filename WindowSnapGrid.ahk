@@ -271,6 +271,21 @@ IsNativeAutoHideOnSecondary(MonitorIndex) {
     return primaryMonitorOnly = 1
 }
 
+; Check if the taskbar is currently hidden by the taskbar-auto-hide-when-maximized mod
+; (i.e. mod is enabled and a window is maximized on the given monitor)
+IsWindhawkAutoHideActive(MonitorIndex) {
+    if (!IsWindhawkModEnabled("taskbar-auto-hide-when-maximized"))
+        return false
+    if (!IsWindowMaximized(MonitorIndex))
+        return false
+    if (MonitorIndex = MonitorGetPrimary())
+        return true
+
+    regBase := "HKLM\SOFTWARE\Windhawk\Engine\Mods\taskbar-auto-hide-when-maximized\Settings"
+    primaryMonitorOnly := RegRead(regBase, "primaryMonitorOnly", 0)
+    return primaryMonitorOnly != 1
+}
+
 ; Check if the taskbar-auto-hide-when-maximized mod applies to the given monitor
 IsWindhawkAutoHideApplies(MonitorIndex) {
     if (!IsWindhawkModEnabled("taskbar-auto-hide-when-maximized"))
@@ -349,9 +364,11 @@ GetAdjustedWorkArea(MonitorIndex) {
         Bottom := MBottom - SCREEN_EDGE_MARGIN
     }
 
-    if (IsNativeAutoHideOnSecondary(MonitorIndex)) {
+    if (IsNativeAutoHideOnSecondary(MonitorIndex) || IsWindhawkAutoHideActive(MonitorIndex)) {
         MonitorGet(MonitorIndex, &MLeft, &MTop, &MRight, &MBottom)
         Bottom := MBottom - SCREEN_EDGE_MARGIN
+        if (IsTaskbarOnTop(MonitorIndex))
+            Top := MTop + SCREEN_EDGE_MARGIN
     }
 
     return [Left, Top, Right, Bottom]
