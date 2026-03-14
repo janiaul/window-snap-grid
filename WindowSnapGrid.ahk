@@ -163,20 +163,8 @@ MoveWindowSafelyEnhanced(X, Y, W := "", H := "", WinTitle := "A", ForceToBottom 
         } else {
             WinMove(X, Y, W, H, WinTitle)
         }
-        ; Verify position and make final adjustment if needed for bottom snapping
-        if (ForceToBottom) {
-            Sleep(10)  ; Small delay to ensure the move completed
-            WinGetPos(&NewX, &NewY, &NewW, &NewH, WinTitle)
-            ActiveMonitor := GetActiveMonitor(NewX, NewY, NewW, NewH, WinTitle)
-            WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-            ; If window still isn't at the correct position, try one more adjustment
-            ExpectedBottom := IsTaskbarOnTop(ActiveMonitor) ? WorkArea[4] : WorkArea[4] - TASKBAR_GAP
-            if (NewY + NewH < ExpectedBottom - 5) {  ; 5 pixel tolerance
-                FinalY := ExpectedBottom - NewH
-                WinMove(NewX, FinalY, , , WinTitle)
-            }
-        }
     } catch as err {
+        Critical(false)
         if (InStr(err.Message, "Access is denied")) {
             MsgBox("Unable to move this window due to system restrictions. Try running the script as administrator.",
                 "Access Denied", 48)
@@ -427,6 +415,7 @@ GetAdjustedWorkArea(MonitorIndex) {
 ; HAlign: "left", "center", "right"
 ; VAlign: "top", "center", "bottom"
 SnapWindow(HAlign, VAlign) {
+    Critical
     try {
         if (!WindowExists("A"))
             throw Error("No active window found.")
@@ -446,6 +435,7 @@ SnapWindow(HAlign, VAlign) {
 
         MoveWindowSafelyEnhanced(X, Y, "", "", "A", ForceToBottom)
     } catch as err {
+        Critical(false)
         MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
     }
 }
