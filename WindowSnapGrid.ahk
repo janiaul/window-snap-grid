@@ -423,167 +423,92 @@ GetAdjustedWorkArea(MonitorIndex) {
     return [Left, Top, Right, Bottom]
 }
 
-; Get information about the currently focused window
-GetFocusedWindowInfo() {
-    if (!WindowExists("A")) {
-        throw Error("No active window found.")
+; Snap the active window to the given position on its current monitor.
+; HAlign: "left", "center", "right"
+; VAlign: "top", "center", "bottom"
+SnapWindow(HAlign, VAlign) {
+    try {
+        if (!WindowExists("A"))
+            throw Error("No active window found.")
+        WinGetPos(&WinX, &WinY, &WinW, &WinH, "A")
+        ActiveMonitor := GetActiveMonitor(WinX, WinY, WinW, WinH, "A")
+        WorkArea := GetAdjustedWorkArea(ActiveMonitor)
+        FrameSize := GetWindowFrameSize("A")
+
+        X := HAlign = "left" ? WorkArea[1] - FrameSize.Left
+            : HAlign = "right" ? WorkArea[3] - WinW + FrameSize.Right
+                : WorkArea[1] + (WorkArea[3] - WorkArea[1] - WinW) // 2  ; center
+
+        ForceToBottom := VAlign = "bottom"
+        Y := VAlign = "top" ? WorkArea[2]
+            : VAlign = "bottom" ? 0
+                : WorkArea[2] + (WorkArea[4] - WorkArea[2] - WinH) // 2  ; center
+
+        MoveWindowSafelyEnhanced(X, Y, "", "", "A", ForceToBottom)
+    } catch as err {
+        MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
     }
-    WinGetPos(&WinX, &WinY, &WinW, &WinH, "A")
-    return { X: WinX, Y: WinY, W: WinW, H: WinH }
 }
 
-; Center window horizontally and vertically
+; Center
 $^+#s:: ; Ctrl+Shift+Win+S
 {
-    if (_IsHotkeyDuplicate(A_ThisHotkey))
-        return
-    try {
-        WinInfo := GetFocusedWindowInfo()
-        ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
-        WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        CenterX := WorkArea[1] + (WorkArea[3] - WorkArea[1] - WinInfo.W) // 2
-        CenterY := WorkArea[2] + (WorkArea[4] - WorkArea[2] - WinInfo.H) // 2
-        MoveWindowSafely(CenterX, CenterY)
-    } catch as err {
-        MsgBox("Error: " . err.Message, "Window Centering Error", 16)
-    }
+    if (!_IsHotkeyDuplicate(A_ThisHotkey))
+        SnapWindow("center", "center")
 }
 
-; Snap left (center vertically, align to left)
-$^+#a:: ; Ctrl+Shift+Win+A
-{
-    if (_IsHotkeyDuplicate(A_ThisHotkey))
-        return
-    try {
-        WinInfo := GetFocusedWindowInfo()
-        ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
-        WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        FrameSize := GetWindowFrameSize("A")
-        LeftX := WorkArea[1] - FrameSize.Left
-        CenterY := WorkArea[2] + (WorkArea[4] - WorkArea[2] - WinInfo.H) // 2
-        MoveWindowSafelyEnhanced(LeftX, CenterY, "", "", "A", false)
-    } catch as err {
-        MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
-    }
-}
-
-; Snap right (center vertically, align to right)
-$^+#d:: ; Ctrl+Shift+Win+D
-{
-    if (_IsHotkeyDuplicate(A_ThisHotkey))
-        return
-    try {
-        WinInfo := GetFocusedWindowInfo()
-        ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
-        WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        FrameSize := GetWindowFrameSize("A")
-        RightX := WorkArea[3] - WinInfo.W + FrameSize.Right
-        CenterY := WorkArea[2] + (WorkArea[4] - WorkArea[2] - WinInfo.H) // 2
-        MoveWindowSafelyEnhanced(RightX, CenterY, "", "", "A", false)
-    } catch as err {
-        MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
-    }
-}
-
-; Snap top (center horizontally, align to top)
+; Top center
 $^+#w:: ; Ctrl+Shift+Win+W
 {
-    if (_IsHotkeyDuplicate(A_ThisHotkey))
-        return
-    try {
-        WinInfo := GetFocusedWindowInfo()
-        ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
-        WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        CenterX := WorkArea[1] + (WorkArea[3] - WorkArea[1] - WinInfo.W) // 2
-        TopY := WorkArea[2]
-        MoveWindowSafely(CenterX, TopY)
-    } catch as err {
-        MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
-    }
+    if (!_IsHotkeyDuplicate(A_ThisHotkey))
+        SnapWindow("center", "top")
 }
 
-; Snap bottom (center horizontally, align to bottom)
+; Bottom center
 $^+#x:: ; Ctrl+Shift+Win+X
 {
-    if (_IsHotkeyDuplicate(A_ThisHotkey))
-        return
-    try {
-        WinInfo := GetFocusedWindowInfo()
-        ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
-        WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        CenterX := WorkArea[1] + (WorkArea[3] - WorkArea[1] - WinInfo.W) // 2
-        MoveWindowSafelyEnhanced(CenterX, 0, "", "", "A", true)
-    } catch as err {
-        MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
-    }
+    if (!_IsHotkeyDuplicate(A_ThisHotkey))
+        SnapWindow("center", "bottom")
 }
 
-; Top-left corner
+; Left center
+$^+#a:: ; Ctrl+Shift+Win+A
+{
+    if (!_IsHotkeyDuplicate(A_ThisHotkey))
+        SnapWindow("left", "center")
+}
+
+; Right center
+$^+#d:: ; Ctrl+Shift+Win+D
+{
+    if (!_IsHotkeyDuplicate(A_ThisHotkey))
+        SnapWindow("right", "center")
+}
+
+; Top-left
 $^+#q:: ; Ctrl+Shift+Win+Q
 {
-    if (_IsHotkeyDuplicate(A_ThisHotkey))
-        return
-    try {
-        WinInfo := GetFocusedWindowInfo()
-        ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
-        WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        FrameSize := GetWindowFrameSize("A")
-        LeftX := WorkArea[1] - FrameSize.Left
-        TopY := WorkArea[2]
-        MoveWindowSafelyEnhanced(LeftX, TopY, "", "", "A", false)
-    } catch as err {
-        MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
-    }
+    if (!_IsHotkeyDuplicate(A_ThisHotkey))
+        SnapWindow("left", "top")
 }
 
-; Top-right corner
+; Top-right
 $^+#e:: ; Ctrl+Shift+Win+E
 {
-    if (_IsHotkeyDuplicate(A_ThisHotkey))
-        return
-    try {
-        WinInfo := GetFocusedWindowInfo()
-        ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
-        WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        FrameSize := GetWindowFrameSize("A")
-        RightX := WorkArea[3] - WinInfo.W + FrameSize.Right
-        TopY := WorkArea[2]
-        MoveWindowSafelyEnhanced(RightX, TopY, "", "", "A", false)
-    } catch as err {
-        MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
-    }
+    if (!_IsHotkeyDuplicate(A_ThisHotkey))
+        SnapWindow("right", "top")
 }
 
-; Bottom-left corner
+; Bottom-left
 $^+#z:: ; Ctrl+Shift+Win+Z
 {
-    if (_IsHotkeyDuplicate(A_ThisHotkey))
-        return
-    try {
-        WinInfo := GetFocusedWindowInfo()
-        ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
-        WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        FrameSize := GetWindowFrameSize("A")
-        LeftX := WorkArea[1] - FrameSize.Left
-        MoveWindowSafelyEnhanced(LeftX, 0, "", "", "A", true)
-    } catch as err {
-        MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
-    }
+    if (!_IsHotkeyDuplicate(A_ThisHotkey))
+        SnapWindow("left", "bottom")
 }
 
-; Bottom-right corner
+; Bottom-right
 $^+#c:: ; Ctrl+Shift+Win+C
 {
-    if (_IsHotkeyDuplicate(A_ThisHotkey))
-        return
-    try {
-        WinInfo := GetFocusedWindowInfo()
-        ActiveMonitor := GetActiveMonitor(WinInfo.X, WinInfo.Y, WinInfo.W, WinInfo.H, "A")
-        WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        FrameSize := GetWindowFrameSize("A")
-        RightX := WorkArea[3] - WinInfo.W + FrameSize.Right
-        MoveWindowSafelyEnhanced(RightX, 0, "", "", "A", true)
-    } catch as err {
-        MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
-    }
+    if (!_IsHotkeyDuplicate(A_ThisHotkey))
+        SnapWindow("right", "bottom")
 }
