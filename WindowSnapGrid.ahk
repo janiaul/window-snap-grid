@@ -2,8 +2,9 @@
 #NoTrayIcon
 #SingleInstance Force
 
-global TASKBAR_GAP := 0          ; Pixels between window and taskbar
-global SCREEN_EDGE_MARGIN := 0   ; Optional extra inset from all screen edges (0 = flush; per-app frame bleed is handled automatically)
+_cfg := A_ScriptDir "\config.ini"
+global TASKBAR_GAP := Integer(IniRead(_cfg, "Settings", "TASKBAR_GAP", "0"))
+global SCREEN_EDGE_MARGIN := Integer(IniRead(_cfg, "Settings", "SCREEN_EDGE_MARGIN", "0"))
 
 ; Cache for expensive calls (file reads, window enumeration, registry reads)
 ; Values are reused within _CACHE_TTL milliseconds to avoid redundant work
