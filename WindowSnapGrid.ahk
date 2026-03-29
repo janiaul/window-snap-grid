@@ -3,7 +3,7 @@
 #SingleInstance Force
 
 global TASKBAR_GAP := 0          ; Pixels between window and taskbar
-global SCREEN_EDGE_MARGIN := 2   ; Pixels between window and screen edges (prevents frame bleed)
+global SCREEN_EDGE_MARGIN := 0   ; Optional extra inset from all screen edges (0 = flush; per-app frame bleed is handled automatically)
 
 ; Cache for expensive calls (file reads, window enumeration, registry reads)
 ; Values are reused within _CACHE_TTL milliseconds to avoid redundant work
@@ -149,13 +149,22 @@ MoveWindowSafelyEnhanced(X, Y, W := "", H := "", WinTitle := "A", ForceToBottom 
             WorkArea := GetAdjustedWorkArea(ActiveMonitor)
             ; When taskbar is on top, snap to the true screen bottom with no gap
             AbsoluteBottom := IsTaskbarOnTop(ActiveMonitor) ? WorkArea[4] : WorkArea[4] - TASKBAR_GAP
-            ; Account for window frame
-            AdjustedY := AbsoluteBottom - CurH + FrameSize.Bottom
-            ; Use the adjusted Y position
-            Y := AdjustedY
+            ; Same 1px nudge as X: keep the DWM border pixel within this monitor for apps with a
+            ; non-client bottom frame. Discord/MusicBee (FrameSize.Bottom = 0) are unaffected.
+            if (FrameSize.Bottom > 0 && SCREEN_EDGE_MARGIN = 0)
+                AbsoluteBottom -= 1
+            Y := AbsoluteBottom - CurH + FrameSize.Bottom
         }
+        ; Use SWP_NOSENDCHANGING (0x0400) to suppress WM_WINDOWPOSCHANGING so apps with extended DWM
+        ; frames (WhatsApp, Firefox, Explorer) cannot intercept and "correct" the position when the
+        ; invisible border extends slightly past a monitor edge. Without this, those apps snap to the
+        ; primary monitor on multi-monitor setups where an adjacent monitor borders the snap edge.
+        hWnd := WinExist(WinTitle)
+        if (WinGetMinMax(WinTitle) = 1)
+            WinRestore(WinTitle)
         if (W = "" && H = "") {
-            WinMove(X, Y, , , WinTitle)
+            DllCall("SetWindowPos", "Ptr", hWnd, "Ptr", 0, "Int", X, "Int", Y, "Int", 0, "Int", 0,
+                "UInt", 0x0001 | 0x0004 | 0x0010 | 0x0400)  ; NOSIZE | NOZORDER | NOACTIVATE | NOSENDCHANGING
         } else if (W = "") {
             WinMove(X, Y, , H, WinTitle)
         } else if (H = "") {
@@ -424,8 +433,14 @@ SnapWindow(HAlign, VAlign) {
         WorkArea := GetAdjustedWorkArea(ActiveMonitor)
         FrameSize := GetWindowFrameSize("A")
 
-        X := HAlign = "left" ? WorkArea[1] - FrameSize.Left
-            : HAlign = "right" ? WorkArea[3] - WinW + FrameSize.Right
+        ; When SCREEN_EDGE_MARGIN = 0, apps with an invisible DWM extended frame (FrameSize > 0) have
+        ; their 1px colored border land just outside the monitor, rendering on the adjacent monitor.
+        ; Nudge 1px inward so the border pixel sits on the correct monitor. SCREEN_EDGE_MARGIN >= 1
+        ; already provides enough gap, so no nudge is needed in that case.
+        BleedPx := Max(0, 1 - SCREEN_EDGE_MARGIN)
+
+        X := HAlign = "left" ? WorkArea[1] - FrameSize.Left + (FrameSize.Left > 0 ? BleedPx : 0)
+            : HAlign = "right" ? WorkArea[3] - WinW + FrameSize.Right - (FrameSize.Right > 0 ? BleedPx : 0)
                 : WorkArea[1] + (WorkArea[3] - WorkArea[1] - WinW) // 2  ; center
 
         ForceToBottom := VAlign = "bottom"
