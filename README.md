@@ -21,10 +21,14 @@ An AutoHotkey v2 script that snaps windows to a 9-point grid across multiple mon
 - **[Windhawk](https://github.com/ramensoftware/windhawk) — taskbar-on-top** — reads per-monitor `taskbarLocation` and `taskbarLocationSecondary` registry settings and adjusts top/bottom boundaries per monitor accordingly
 
 ## Configuration
-At the top of the script:
-```autohotkey
-global TASKBAR_GAP := 0        ; Gap between window and taskbar
-global SCREEN_EDGE_MARGIN := 2 ; Gap between window and screen edges
+Edit `config.ini` (copy from `config.example.ini` if it doesn't exist):
+```ini
+[Settings]
+# Pixels between window bottom and taskbar (0 = flush against taskbar)
+TASKBAR_GAP=0
+
+# Optional extra inset from all screen edges in pixels (0 = flush; per-app DWM frame bleed is handled automatically)
+SCREEN_EDGE_MARGIN=0
 ```
 
 ## Requirements
@@ -34,4 +38,5 @@ global SCREEN_EDGE_MARGIN := 2 ; Gap between window and screen edges
 ## Installation
 1. Install AutoHotkey v2
 2. Clone or download the repository
-3. Run `WindowSnapGrid.ahk`, or add it to your startup folder
+3. Copy `config.example.ini` to `config.ini` and adjust settings as needed
+4. Run `WindowSnapGrid.ahk`, or add it to your startup folder
