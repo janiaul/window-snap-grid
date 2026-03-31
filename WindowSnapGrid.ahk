@@ -10,6 +10,7 @@ global SCREEN_EDGE_MARGIN := Integer(IniRead(_cfg, "Settings", "SCREEN_EDGE_MARG
 ; Values are reused within _CACHE_TTL milliseconds to avoid redundant work
 global _cache := Map()
 global _CACHE_TTL := 500
+global _HK_DEDUP_TTL := 150  ; shorter TTL for hotkey dedup to avoid suppressing intentional rapid use
 
 _CacheGet(key, &value) {
     if (_cache.Has(key)) {
@@ -24,47 +25,54 @@ _CacheGet(key, &value) {
 
 _CacheSet(key, value) {
     _cache[key] := { value: value, tick: A_TickCount }
+    if (_cache.Count > 40)
+        _CachePrune()
     return value
 }
 
-; Returns true if this hotkey+window combination was already triggered within the cache TTL
+; Remove all cache entries that have exceeded the TTL
+_CachePrune() {
+    now := A_TickCount
+    toDelete := []
+    for key, entry in _cache
+        if (now - entry.tick >= _CACHE_TTL)
+            toDelete.Push(key)
+    for key in toDelete
+        _cache.Delete(key)
+}
+
+; Returns true if this hotkey+window combination was already triggered within _HK_DEDUP_TTL
+; Bypasses _CacheGet/_CacheSet to use _HK_DEDUP_TTL instead of _CACHE_TTL
 _IsHotkeyDuplicate(HotkeyName) {
     cacheKey := "HK_" . HotkeyName . "_" . WinExist("A")
-    if (_CacheGet(cacheKey, &_))
+    if (_cache.Has(cacheKey) && A_TickCount - _cache[cacheKey].tick < _HK_DEDUP_TTL)
         return true
-    _CacheSet(cacheKey, true)
+    _cache[cacheKey] := { value: true, tick: A_TickCount }
     return false
 }
 
-; Determine which monitor a window is on based on its coordinates
+; Determine which monitor a window is on, falling back to coordinate-based detection
 GetActiveMonitor(X, Y, W := 0, H := 0, WinTitle := "A") {
-    if (WinTitle != "") {
-        if (hWnd := WinExist(WinTitle)) {
-            ; Create RECT structure
-            RECT := Buffer(16)
-            DllCall("GetWindowRect", "Ptr", hWnd, "Ptr", RECT)
+    if (hWnd := WinExist(WinTitle)) {
+        MONITOR_DEFAULTTOPRIMARY := 0x1
+        hMonitor := DllCall("MonitorFromWindow", "Ptr", hWnd, "UInt", MONITOR_DEFAULTTOPRIMARY, "Ptr")
 
-            ; Get monitor from window rect
-            MONITOR_DEFAULTTOPRIMARY := 0x1
-            hMonitor := DllCall("MonitorFromRect", "Ptr", RECT, "UInt", MONITOR_DEFAULTTOPRIMARY, "Ptr")
+        ; Read rcWork from MONITORINFO and match against AHK's MonitorGetWorkArea to get the AHK index.
+        ; This avoids allocating a buffer and calling MonitorFromRect per loop iteration.
+        ; MONITORINFO layout: cbSize(4) + rcMonitor(16) + rcWork(16) + dwFlags(4) = 40 bytes
+        ; rcWork starts at offset 20: left(20), top(24), right(28), bottom(32)
+        MONITORINFO := Buffer(40)
+        NumPut("UInt", 40, MONITORINFO, 0)  ; cbSize
+        if (DllCall("GetMonitorInfo", "Ptr", hMonitor, "Ptr", MONITORINFO)) {
+            mLeft := NumGet(MONITORINFO, 20, "Int")
+            mTop := NumGet(MONITORINFO, 24, "Int")
+            mRight := NumGet(MONITORINFO, 28, "Int")
+            mBot := NumGet(MONITORINFO, 32, "Int")
 
-            ; Get monitor info
-            MONITORINFO := Buffer(40)
-            NumPut("UInt", 40, MONITORINFO, 0)  ; cbSize
-            if (DllCall("GetMonitorInfo", "Ptr", hMonitor, "Ptr", MONITORINFO)) {
-                ; Loop through monitors to find matching one
-                loop MonitorGetCount() {
-                    MonitorGetWorkArea(A_Index, &Left, &Top, &Right, &Bottom)
-                    testRECT := Buffer(16)
-                    NumPut("Int", Left, testRECT, 0)
-                    NumPut("Int", Top, testRECT, 4)
-                    NumPut("Int", Right, testRECT, 8)
-                    NumPut("Int", Bottom, testRECT, 12)
-
-                    currHMonitor := DllCall("MonitorFromRect", "Ptr", testRECT, "UInt", MONITOR_DEFAULTTOPRIMARY)
-                    if (currHMonitor = hMonitor)
-                        return A_Index
-                }
+            loop MonitorGetCount() {
+                MonitorGetWorkArea(A_Index, &Left, &Top, &Right, &Bottom)
+                if (Left = mLeft && Top = mTop && Right = mRight && Bottom = mBot)
+                    return A_Index
             }
         }
     }
@@ -89,15 +97,15 @@ GetActiveMonitor(X, Y, W := 0, H := 0, WinTitle := "A") {
     return PrimaryMonitor
 }
 
-; Check if a window with the given title exists
-WindowExists(WinTitle := "A") {
-    return WinExist(WinTitle) != 0
-}
-
 ; Get window frame thickness (for better positioning accuracy)
-GetWindowFrameSize(WinTitle := "A") {
-    if (!(hWnd := WinExist(WinTitle)))
+; Accepts an hwnd directly; result is cached by hwnd since frame sizes are stable
+GetWindowFrameSize(hWnd) {
+    if (!hWnd)
         return { Left: 0, Top: 0, Right: 0, Bottom: 0 }
+
+    cacheKey := "FS_" . hWnd
+    if (_CacheGet(cacheKey, &cached))
+        return cached
 
     try {
         ; Get window rect (including frame)
@@ -114,7 +122,7 @@ GetWindowFrameSize(WinTitle := "A") {
         ClientWidth := NumGet(ClientRECT, 8, "Int")
         ClientHeight := NumGet(ClientRECT, 12, "Int")
 
-        ; Get client area position
+        ; Get client area position in screen coordinates
         ClientPOINT := Buffer(8)
         NumPut("Int", 0, ClientPOINT, 0)
         NumPut("Int", 0, ClientPOINT, 4)
@@ -122,29 +130,31 @@ GetWindowFrameSize(WinTitle := "A") {
         ClientLeft := NumGet(ClientPOINT, 0, "Int")
         ClientTop := NumGet(ClientPOINT, 4, "Int")
 
-        return {
+        return _CacheSet(cacheKey, {
             Left: ClientLeft - WinLeft,
             Top: ClientTop - WinTop,
             Right: WinRight - (ClientLeft + ClientWidth),
             Bottom: WinBottom - (ClientTop + ClientHeight)
-        }
+        })
     } catch {
-        return { Left: 0, Top: 0, Right: 0, Bottom: 0 }
+        return _CacheSet(cacheKey, { Left: 0, Top: 0, Right: 0, Bottom: 0 })
     }
 }
 
 ; Enhanced window moving function that accounts for window frames
 MoveWindowSafelyEnhanced(X, Y, W := "", H := "", WinTitle := "A", ForceToBottom := false) {
-    if (!WindowExists(WinTitle)) {
-        MsgBox("The specified window does not exist.", "Error", 16)
+    if (!(hWnd := WinExist(WinTitle)))
         return
-    }
     try {
-        ; Get window frame information for more accurate positioning
-        FrameSize := GetWindowFrameSize(WinTitle)
+        ; Restore before querying size so CurH reflects the actual post-restore height,
+        ; not the maximized screen height which would make ForceToBottom Y wrong
+        if (WinGetMinMax(WinTitle) = 1)
+            WinRestore(WinTitle)
+        ; hWnd is obtained once above and reused throughout to avoid redundant WinExist calls
+        FrameSize := GetWindowFrameSize(hWnd)
         ; If ForceToBottom is true, adjust the Y position to account for potential app-specific margins
         if (ForceToBottom) {
-            ; Get current window info
+            ; Get current window info (post-restore so CurH is the restored height)
             WinGetPos(&CurX, &CurY, &CurW, &CurH, WinTitle)
             ActiveMonitor := GetActiveMonitor(CurX, CurY, CurW, CurH, WinTitle)
             WorkArea := GetAdjustedWorkArea(ActiveMonitor)
@@ -157,30 +167,21 @@ MoveWindowSafelyEnhanced(X, Y, W := "", H := "", WinTitle := "A", ForceToBottom 
             Y := AbsoluteBottom - CurH + FrameSize.Bottom
         }
         ; Use SWP_NOSENDCHANGING (0x0400) to suppress WM_WINDOWPOSCHANGING so apps with extended DWM
-        ; frames (WhatsApp, Firefox, Explorer) cannot intercept and "correct" the position when the
-        ; invisible border extends slightly past a monitor edge. Without this, those apps snap to the
-        ; primary monitor on multi-monitor setups where an adjacent monitor borders the snap edge.
-        hWnd := WinExist(WinTitle)
-        if (WinGetMinMax(WinTitle) = 1)
-            WinRestore(WinTitle)
+        ; frames cannot intercept and "correct" the position when the invisible border extends
+        ; slightly past a monitor edge. Without this, those apps snap to the primary monitor
+        ; on multi-monitor setups where an adjacent monitor borders the snap edge.
         if (W = "" && H = "") {
             DllCall("SetWindowPos", "Ptr", hWnd, "Ptr", 0, "Int", X, "Int", Y, "Int", 0, "Int", 0,
                 "UInt", 0x0001 | 0x0004 | 0x0010 | 0x0400)  ; NOSIZE | NOZORDER | NOACTIVATE | NOSENDCHANGING
-        } else if (W = "") {
-            WinMove(X, Y, , H, WinTitle)
-        } else if (H = "") {
-            WinMove(X, Y, W, , WinTitle)
         } else {
             WinMove(X, Y, W, H, WinTitle)
         }
     } catch as err {
         Critical(false)
-        if (InStr(err.Message, "Access is denied")) {
-            MsgBox("Unable to move this window due to system restrictions. Try running the script as administrator.",
-                "Access Denied", 48)
-        } else {
-            MsgBox("An unexpected error occurred: " . err.Message, "Error", 16)
-        }
+        if (InStr(err.Message, "Access is denied"))
+            _ShowError("Cannot move window: run the script as administrator.")
+        else
+            _ShowError("Window move error: " . err.Message)
     }
 }
 
@@ -189,7 +190,7 @@ MoveWindowSafely(X, Y, W := "", H := "", WinTitle := "A") {
     MoveWindowSafelyEnhanced(X, Y, W, H, WinTitle, false)
 }
 
-; Get the height of the taskbar, accounting for display scaling
+; Get the height of the taskbar for the given monitor
 GetTaskbarHeight(MonitorIndex := 0) {
     ; If no monitor specified, use primary
     if (MonitorIndex = 0)
@@ -199,19 +200,36 @@ GetTaskbarHeight(MonitorIndex := 0) {
     if (_CacheGet(cacheKey, &cached))
         return cached
 
-    ; Try to get the taskbar window
-    if (taskbar := WinExist("ahk_class Shell_TrayWnd")) {
-        WinGetPos(&Left, &Top, &Width, &Height, taskbar)
-        return _CacheSet(cacheKey, Height)
+    if (MonitorIndex = MonitorGetPrimary()) {
+        ; Primary taskbar uses Shell_TrayWnd
+        if (taskbar := WinExist("ahk_class Shell_TrayWnd")) {
+            WinGetPos(, , , &Height, taskbar)
+            return _CacheSet(cacheKey, Height)
+        }
+    } else {
+        ; Secondary monitor taskbars use Shell_SecondaryTrayWnd; there may be multiple,
+        ; so find the one whose position falls within this monitor's physical bounds
+        MonitorGet(MonitorIndex, &MLeft, &MTop, &MRight, &MBottom)
+        windows := WinGetList("ahk_class Shell_SecondaryTrayWnd")
+        for hwnd in windows {
+            WinGetPos(&tbX, &tbY, , &tbH, "ahk_id " . hwnd)
+            if (tbX >= MLeft && tbX < MRight && tbY >= MTop && tbY < MBottom)
+                return _CacheSet(cacheKey, tbH)
+        }
     }
-    ; If taskbar window not found, estimate based on DPI scaling
-    hDC := DllCall("GetDC", "Ptr", 0)
-    dpi := DllCall("GetDeviceCaps", "Ptr", hDC, "Int", 88)  ; LOGPIXELSX
-    DllCall("ReleaseDC", "Ptr", 0, "Ptr", hDC)
-    scaleFactor := dpi / 96  ; 96 is the base DPI
 
-    ; Base taskbar height is 48 pixels at 100% scaling
-    return _CacheSet(cacheKey, Round(48 * scaleFactor))
+    ; Fallback: estimate from this monitor's DPI (base 48px at 100% / 96 DPI).
+    ; Use GetDpiForMonitor rather than GetDC(NULL) which returns primary-monitor DPI only.
+    MonitorGet(MonitorIndex, &MLeft, &MTop, &MRight, &MBottom)
+    rcBuf := Buffer(16)
+    NumPut("Int", MLeft, rcBuf, 0)
+    NumPut("Int", MTop, rcBuf, 4)
+    NumPut("Int", MLeft + 1, rcBuf, 8)
+    NumPut("Int", MTop + 1, rcBuf, 12)
+    hMonitor := DllCall("MonitorFromRect", "Ptr", rcBuf, "UInt", 0x1, "Ptr")
+    dpiX := 96, dpiY := 96
+    DllCall("Shcore\GetDpiForMonitor", "Ptr", hMonitor, "UInt", 0, "UInt*", &dpiX, "UInt*", &dpiY)
+    return _CacheSet(cacheKey, Round(48 * dpiX / 96))
 }
 
 ; Check if SmartTaskbar is running
@@ -252,9 +270,21 @@ IsWindhawkModEnabled(ModName) {
 
         while (pos <= jsonLen && braceCount > 0) {
             char := SubStr(jsonContent, pos, 1)
-            if (char = '{')
+            if (char = '"') {
+                ; Skip string literal, respecting escape sequences, so that { or } inside
+                ; a JSON string value does not corrupt the brace count
+                pos++
+                while (pos <= jsonLen) {
+                    c := SubStr(jsonContent, pos, 1)
+                    if (c = '\')
+                        pos++  ; skip the escaped character
+                    else if (c = '"')
+                        break
+                    pos++
+                }
+            } else if (char = '{') {
                 braceCount++
-            else if (char = '}') {
+            } else if (char = '}') {
                 braceCount--
                 if (braceCount = 0)
                     endPos := pos
@@ -266,7 +296,7 @@ IsWindhawkModEnabled(ModName) {
             return _CacheSet(cacheKey, false)
 
         modSection := SubStr(jsonContent, startPos, endPos - startPos)
-        result := !InStr(modSection, '"disabled": true')
+        result := !RegExMatch(modSection, '"disabled"\s*:\s*true')
         return _CacheSet(cacheKey, result)
 
     } catch {
@@ -357,7 +387,6 @@ IsWindowMaximized(MonitorIndex) {
     if (_CacheGet(cacheKey, &cached))
         return cached
 
-    DetectHiddenWindows(false)
     windows := WinGetList()
 
     for window in windows {
@@ -421,18 +450,28 @@ GetAdjustedWorkArea(MonitorIndex) {
     return [Left, Top, Right, Bottom]
 }
 
+; Show a brief non-blocking error tooltip that auto-dismisses after 3 seconds
+_ShowError(msg) {
+    ToolTip(msg)
+    SetTimer(_ClearErrorTooltip, -3000)
+}
+
+_ClearErrorTooltip() {
+    ToolTip()
+}
+
 ; Snap the active window to the given position on its current monitor.
 ; HAlign: "left", "center", "right"
 ; VAlign: "top", "center", "bottom"
 SnapWindow(HAlign, VAlign) {
     Critical
     try {
-        if (!WindowExists("A"))
+        if (!(hWnd := WinExist("A")))
             throw Error("No active window found.")
         WinGetPos(&WinX, &WinY, &WinW, &WinH, "A")
         ActiveMonitor := GetActiveMonitor(WinX, WinY, WinW, WinH, "A")
         WorkArea := GetAdjustedWorkArea(ActiveMonitor)
-        FrameSize := GetWindowFrameSize("A")
+        FrameSize := GetWindowFrameSize(hWnd)
 
         ; When SCREEN_EDGE_MARGIN = 0, apps with an invisible DWM extended frame (FrameSize > 0) have
         ; their 1px colored border land just outside the monitor, rendering on the adjacent monitor.
@@ -452,7 +491,7 @@ SnapWindow(HAlign, VAlign) {
         MoveWindowSafelyEnhanced(X, Y, "", "", "A", ForceToBottom)
     } catch as err {
         Critical(false)
-        MsgBox("Error: " . err.Message, "Window Positioning Error", 16)
+        _ShowError("Snap error: " . err.Message)
     }
 }
 
