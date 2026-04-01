@@ -6,6 +6,14 @@ _cfg := A_ScriptDir "\config.ini"
 global TASKBAR_GAP := Integer(IniRead(_cfg, "Settings", "TASKBAR_GAP", "0"))
 global SCREEN_EDGE_MARGIN := Integer(IniRead(_cfg, "Settings", "SCREEN_EDGE_MARGIN", "0"))
 
+; Reload on resume from sleep/wake so the keyboard hook is re-registered.
+; Windows 11 can silently drop low-level hooks across power transitions.
+OnMessage(0x0218, _OnPowerBroadcast)
+_OnPowerBroadcast(wParam, lParam, msg, hwnd) {
+    if (wParam = 0x12)  ; PBT_APMRESUMEAUTOMATIC
+        Reload()
+}
+
 ; Cache for expensive calls (file reads, window enumeration, registry reads)
 ; Values are reused within _CACHE_TTL milliseconds to avoid redundant work
 global _cache := Map()
@@ -489,6 +497,7 @@ SnapWindow(HAlign, VAlign) {
                 : WorkArea[2] + (WorkArea[4] - WorkArea[2] - WinH) // 2  ; center
 
         MoveWindowSafelyEnhanced(X, Y, "", "", "A", ForceToBottom)
+        Critical(false)
     } catch as err {
         Critical(false)
         _ShowError("Snap error: " . err.Message)
